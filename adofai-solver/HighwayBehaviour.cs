@@ -315,20 +315,20 @@ namespace AdofaiHighway
                     alpha = 0.95f * (1f - (float)(pastBy / fadeSeconds));
                 }
 
-                Color c;
-                switch (noteKind[i])
+                if (noteKind[i] == NoteKind.Multitap)
                 {
-                    case NoteKind.Midspin:
-                        c = new Color(1f, 0.55f, 0.1f, alpha);   // orange
-                        break;
-                    case NoteKind.Multitap:
-                        c = new Color(0.75f, 0.4f, 1f, alpha);   // violet
-                        break;
-                    default:
-                        c = new Color(s.noteColorR, s.noteColorG, s.noteColorB, alpha);
-                        break;
+                    // Two keys at once — draw a double bar to echo that.
+                    Color c = new Color(s.multitapColorR, s.multitapColorG, s.multitapColorB, alpha);
+                    DrawRect(laneLeft, y - 3f, s.laneWidth, 2f, c);
+                    DrawRect(laneLeft, y + 1f, s.laneWidth, 2f, c);
                 }
-                DrawRect(laneLeft, y - 2f, s.laneWidth, 4f, c);
+                else
+                {
+                    Color c = noteKind[i] == NoteKind.Midspin
+                        ? new Color(1f, 0.55f, 0.1f, alpha)   // orange
+                        : new Color(s.noteColorR, s.noteColorG, s.noteColorB, alpha);
+                    DrawRect(laneLeft, y - 2f, s.laneWidth, 4f, c);
+                }
             }
 
             if (secondsSinceLanding < fadeSeconds)

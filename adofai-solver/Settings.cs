@@ -14,10 +14,14 @@ namespace AdofaiHighway
 
         public float laneOpacity = 0.45f;
 
-        // 0..1 RGB. Midspins keep a fixed accent so they stay distinct from this.
+        // 0..1 RGB per channel. Midspins stay a fixed orange; multitaps use their own.
         public float noteColorR = 0.30f;
         public float noteColorG = 0.85f;
         public float noteColorB = 1.00f;
+
+        public float multitapColorR = 0.75f;
+        public float multitapColorG = 0.40f;
+        public float multitapColorB = 1.00f;
 
         // ADOFAI has no time signature, so the measure size is chosen here.
         public bool showBeatLines = true;

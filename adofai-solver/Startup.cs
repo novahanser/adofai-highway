@@ -83,18 +83,8 @@ namespace AdofaiHighway
             GUILayout.Label($"Highway opacity: {s.laneOpacity * 100f:0}%");
             s.laneOpacity = GUILayout.HorizontalSlider(s.laneOpacity, 0f, 1f);
 
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Note colour", GUILayout.Width(90f));
-            GUILayout.Box(GUIContent.none, GUILayout.Width(60f), GUILayout.Height(16f));
-            Rect swatch = GUILayoutUtility.GetLastRect();
-            Color prev = GUI.color;
-            GUI.color = new Color(s.noteColorR, s.noteColorG, s.noteColorB, 1f);
-            GUI.DrawTexture(swatch, whiteTex);
-            GUI.color = prev;
-            GUILayout.EndHorizontal();
-            s.noteColorR = GUILayout.HorizontalSlider(s.noteColorR, 0f, 1f);
-            s.noteColorG = GUILayout.HorizontalSlider(s.noteColorG, 0f, 1f);
-            s.noteColorB = GUILayout.HorizontalSlider(s.noteColorB, 0f, 1f);
+            ColorField("Note colour", ref s.noteColorR, ref s.noteColorG, ref s.noteColorB);
+            ColorField("Multitap colour", ref s.multitapColorR, ref s.multitapColorG, ref s.multitapColorB);
 
             GUILayout.Space(8f);
             s.showBeatLines = GUILayout.Toggle(s.showBeatLines, " Show beat / measure lines");
@@ -120,6 +110,33 @@ namespace AdofaiHighway
         private static void OnSaveGUI(UnityModManager.ModEntry modEntry)
         {
             Settings.Save(modEntry);
+        }
+
+        // Colour swatch plus one slider per channel, each labelled with its 0..255 value.
+        private static void ColorField(string label, ref float r, ref float g, ref float b)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label(label, GUILayout.Width(110f));
+            GUILayout.Box(GUIContent.none, GUILayout.Width(60f), GUILayout.Height(16f));
+            Rect swatch = GUILayoutUtility.GetLastRect();
+            Color prev = GUI.color;
+            GUI.color = new Color(r, g, b, 1f);
+            GUI.DrawTexture(swatch, whiteTex);
+            GUI.color = prev;
+            GUILayout.EndHorizontal();
+
+            r = ChannelSlider("R", r);
+            g = ChannelSlider("G", g);
+            b = ChannelSlider("B", b);
+        }
+
+        private static float ChannelSlider(string name, float value)
+        {
+            GUILayout.BeginHorizontal();
+            GUILayout.Label($"{name} {Mathf.RoundToInt(value * 255f),3}", GUILayout.Width(48f));
+            value = GUILayout.HorizontalSlider(value, 0f, 1f);
+            GUILayout.EndHorizontal();
+            return value;
         }
     }
 }
