@@ -1,0 +1,17 @@
+## Build output
+[Bb]in/
+[Oo]bj/
+
+## Editor / local tooling
+.vs/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Local notes (not part of the mod)
+
+## OS
+.DS_Store
+Thumbs.db

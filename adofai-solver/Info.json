@@ -1,0 +1,8 @@
+{
+  "Id": "AdofaiHighway",
+  "DisplayName": "ADOFAI Note Highway",
+  "Author": "sinan",
+  "Version": "0.4.0",
+  "AssemblyName": "AdofaiHighway.dll",
+  "EntryMethod": "AdofaiHighway.Startup.Load"
+}
