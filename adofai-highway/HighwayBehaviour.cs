@@ -378,10 +378,21 @@ namespace AdofaiHighway
             errorStyle.alignment = TextAnchor.MiddleRight;
             errorStyle.normal.textColor = c;
 
-            float w = 130f;
-            float h = errorStyle.fontSize + 12f;
-            string txt = ms == 0 ? "perfect" : $"{ms:+0;-0} ms";
-            GUI.Label(new Rect(laneLeft - w - 8f, hitLineY - h * 0.5f, w, h), txt, errorStyle);
+            var content = new GUIContent($"{Judgment(lastErrorDeg)}  {ms:+0;-0;0} ms");
+            Vector2 size = errorStyle.CalcSize(content);
+            GUI.Label(new Rect(laneLeft - size.x - 8f, hitLineY - size.y * 0.5f, size.x, size.y), content, errorStyle);
+        }
+
+        // The game's judgment name for an angular error (see the wiki's Judgement
+        // table). Sign gives early (<0) vs late (>0).
+        private static string Judgment(float deg)
+        {
+            float a = Mathf.Abs(deg);
+            bool early = deg < 0f;
+            if (a <= 30f) return "Perfect";
+            if (a <= 45f) return early ? "EPerfect" : "LPerfect";
+            if (a <= 60f) return early ? "Early" : "Late";
+            return "Miss";
         }
 
         private void DrawRect(float x, float y, float w, float h, Color color)
