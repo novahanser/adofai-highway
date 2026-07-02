@@ -4,14 +4,15 @@ using UnityEngine;
 
 namespace AdofaiHighway
 {
-    // Draws the note highway as an IMGUI overlay, scrolled by the game's conductor
-    // clock. Because that clock is the only time source, pauses, deaths, scrubs and
-    // speed changes need no special handling — the highway just follows it.
+    // Draws the note highway as an IMGUI overlay, scrolled by the game's conductor clock.
     internal sealed class HighwayBehaviour : MonoBehaviour
     {
         internal static HighwayBehaviour Instance;
 
-        // Midspin = the tile's rapid double-tap variant; Multitap = several keys at once.
+        // Midspin = the tile's rapid double-tap variant.
+        // Multitap = several keys at once.
+        // Multitaps are represented as two thinner stacked lines of a different color
+        // to normal notes.
         private enum NoteKind { Normal, Midspin, Multitap }
 
         private readonly struct Note
@@ -79,8 +80,7 @@ namespace AdofaiHighway
         private Texture2D pixel;
         private GUIStyle errorStyle;
 
-        // Called from JudgmentPatch whenever the game records a judgment on the
-        // scoreboard — the signal that a press really counted.
+        // Called from JudgmentPatch whenever the game records a judgment on the scoreboard.
         internal static void RecordJudgment(HitMargin margin)
         {
             pendingMargin = margin;
@@ -93,8 +93,7 @@ namespace AdofaiHighway
             // The game scores a press just before feeding the meter, inside the same
             // Hit() call, so a judgment recorded this frame belongs to this press. No
             // recorded judgment means the game swallowed the press without scoring it
-            // (hold grace, multipress part, over-press) and shows nothing for it —
-            // mirror that rather than report a phantom miss.
+            // (hold grace, multipress part, over-press).
             if (pendingMarginFrame != Time.frameCount)
             {
                 return;
@@ -204,7 +203,7 @@ namespace AdofaiHighway
                 RebuildBeatMarkers(floors);
                 lastFloors = floors;
                 lastFloorsCount = floors.Count;
-                lastSeenSeqID = SeqUnset;   // don't measure calibration across a level change
+                lastSeenSeqID = SeqUnset; // don't measure calibration across a level change
             }
 
             TrackLandings(floors);
@@ -214,7 +213,7 @@ namespace AdofaiHighway
         {
             var result = new List<Note>(floors.Count);
 
-            // Skip floor 0 (the planet starts there — no tap) and fake/decorative tiles.
+            // Floor 0 is where the planet starts, and for fake/decorative tiles.
             for (int i = 1; i < floors.Count; i++)
             {
                 var floor = floors[i];
@@ -357,13 +356,12 @@ namespace AdofaiHighway
                 DrawRect(laneLeft, hitLineY - 8f, settings.laneWidth, 16f, new Color(1f, 0.95f, 0.4f, 0.55f * glow));
             }
 
-            // Hit line last, so it stays crisp over the notes and glow.
             DrawRect(laneLeft, hitLineY - 1.5f, settings.laneWidth, 3f, new Color(1f, 1f, 1f, 0.9f));
 
             DrawErrorReadout(laneLeft, hitLineY, settings.laneWidth);
         }
 
-        // Drawn under the notes, and only above the hit line (the approaching side).
+        // Drawn under the notes, and only above the hit line.
         private void DrawBeatGrid(double now, double leadSeconds, float laneLeft, float hitLineY)
         {
             var settings = Startup.Settings;
@@ -384,9 +382,9 @@ namespace AdofaiHighway
             }
         }
 
-        // A note reaches the hit line at its time; past that it pins to the line and
-        // fades out quickly rather than sliding on past. Returns how long ago the most
-        // recent note landed, which drives the hit-line glow.
+        // A note reaches the hit line at its time. Past that it pins to the line and
+        // fades out quickly rather than sliding on past.
+        // Returns how long ago the most recent note landed.
         private double DrawNotes(double now, double leadSeconds, float laneLeft, float hitLineY)
         {
             var settings = Startup.Settings;
@@ -424,7 +422,6 @@ namespace AdofaiHighway
 
                 if (notes[i].Kind == NoteKind.Multitap)
                 {
-                    // Two keys at once — a double bar to echo that.
                     Color color = new Color(settings.multitapColorR, settings.multitapColorG, settings.multitapColorB, alpha);
                     DrawRect(laneLeft, y - 3f, settings.laneWidth, 2f, color);
                     DrawRect(laneLeft, y + 1f, settings.laneWidth, 2f, color);
