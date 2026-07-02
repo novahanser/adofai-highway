@@ -2,7 +2,8 @@ using UnityModManagerNet;
 
 namespace AdofaiHighway
 {
-    // Persisted by UMM to Mods/AdofaiHighway/Settings.xml.
+    // Persisted by UMM to Mods/AdofaiHighway/Settings.xml. Field names are the XML
+    // element names, so renaming one silently discards the user's saved value.
     public class Settings : UnityModManager.ModSettings
     {
         public float pixelsPerSecond = 320f;

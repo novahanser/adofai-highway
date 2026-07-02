@@ -14,7 +14,7 @@ namespace AdofaiHighway
 
         private static HighwayBehaviour behaviour;
         private static Harmony harmony;
-        private static Texture2D whiteTex;   // 1x1, tinted for the note-colour swatch
+        private static Texture2D swatchTexture;
 
         internal static void Load(UnityModManager.ModEntry modEntry)
         {
@@ -22,9 +22,9 @@ namespace AdofaiHighway
             Logger = modEntry.Logger;
             Settings = UnityModManager.ModSettings.Load<Settings>(modEntry);
 
-            whiteTex = new Texture2D(1, 1);
-            whiteTex.SetPixel(0, 0, Color.white);
-            whiteTex.Apply();
+            swatchTexture = new Texture2D(1, 1);
+            swatchTexture.SetPixel(0, 0, Color.white);
+            swatchTexture.Apply();
 
             modEntry.OnToggle = OnToggle;
             modEntry.OnGUI = OnGUI;
@@ -35,7 +35,6 @@ namespace AdofaiHighway
         {
             if (enabled)
             {
-                // Hook the game's hit-error signal for the timing readout.
                 harmony = new Harmony(modEntry.Info.Id);
                 harmony.PatchAll(Assembly.GetExecutingAssembly());
 
@@ -121,7 +120,7 @@ namespace AdofaiHighway
             Rect swatch = GUILayoutUtility.GetLastRect();
             Color prev = GUI.color;
             GUI.color = new Color(r, g, b, 1f);
-            GUI.DrawTexture(swatch, whiteTex);
+            GUI.DrawTexture(swatch, swatchTexture);
             GUI.color = prev;
             GUILayout.EndHorizontal();
 
