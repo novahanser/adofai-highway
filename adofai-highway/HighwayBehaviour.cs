@@ -36,8 +36,11 @@ namespace AdofaiHighway
         private int lastSeenSeqID = SeqUnset;
         private const int SeqUnset = -999;
 
-        // Most recent hit's timing error, set by RecordHit. Positive = late, negative = early.
+        // Most recent hit's timing error, set by RecordHit. Positive = late, negative
+        // = early. Degrees is tempo-independent and matches the game's angle-based
+        // judgment; ms is the wall-clock equivalent for display.
         private static float lastErrorMs;
+        private static float lastErrorDeg;
         private static float lastErrorAt = -999f;   // Time.unscaledTime of that hit
         private const float ErrorDisplaySeconds = 1.3f;
 
@@ -69,6 +72,7 @@ namespace AdofaiHighway
             double wrapped = angleDiff - twoPi * Math.Round(angleDiff / twoPi);
             double errSeconds = wrapped / Math.PI * (60.0 / bpmTimesSpeed) / pitch;
             lastErrorMs = (float)(errSeconds * 1000.0);
+            lastErrorDeg = (float)(wrapped * (180.0 / Math.PI));
             lastErrorAt = Time.unscaledTime;
         }
 
@@ -357,10 +361,13 @@ namespace AdofaiHighway
             }
 
             int ms = Mathf.RoundToInt(lastErrorMs);
-            float mag = Mathf.Abs(lastErrorMs);
-            Color c = mag <= 15f ? new Color(0.4f, 1f, 0.5f)         // tight: green
-                    : lastErrorMs < 0f ? new Color(0.4f, 0.75f, 1f)  // early: blue
-                    : new Color(1f, 0.5f, 0.4f);                     // late: red
+            // Colour by the game's angle-based judgment (tempo-independent): Perfect
+            // <=30 deg, E/L-Perfect <=45, Early/Late <=60 (still counts), else miss.
+            float absDeg = Mathf.Abs(lastErrorDeg);
+            Color c = absDeg <= 30f ? new Color(0.4f, 1f, 0.5f)     // Perfect: green
+                    : absDeg <= 45f ? new Color(0.75f, 1f, 0.35f)   // E/L-Perfect: lime
+                    : absDeg <= 60f ? new Color(1f, 0.65f, 0.2f)    // Early/Late: orange
+                    : new Color(1f, 0.4f, 0.35f);                   // miss: red
             c.a = 1f - age / ErrorDisplaySeconds;
 
             if (errorStyle == null)
