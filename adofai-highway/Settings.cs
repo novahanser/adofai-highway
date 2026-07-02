@@ -9,9 +9,9 @@ namespace AdofaiHighway
         public float pixelsPerSecond = 320f;
 
         public float laneWidth = 240f;
-        public float laneHeightFraction = 0.9f;    // of screen height
+        public float laneHeightFraction = 0.9f; // of screen height
         public float rightMargin = 24f;
-        public float hitLineFromBottom = 90f;      // px above the lane's bottom edge
+        public float hitLineFromBottom = 90f; // px above the lane's bottom edge
 
         public float laneOpacity = 0.45f;
 
@@ -24,7 +24,7 @@ namespace AdofaiHighway
         public float multitapColorG = 0.40f;
         public float multitapColorB = 1.00f;
 
-        // ADOFAI has no time signature, so the measure size is chosen here.
+        // As far as I'm aware, ADOFAI has no time signature, so the measure size is chosen here.
         public bool showBeatLines = true;
         public int beatsPerMeasure = 4;
         public float beatLineOpacity = 0.22f;
