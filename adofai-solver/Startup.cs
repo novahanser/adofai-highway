@@ -5,7 +5,7 @@ using UnityModManagerNet;
 
 namespace AdofaiHighway
 {
-    // UMM entry point. See Info.json -> EntryMethod "AdofaiHighway.Startup.Load".
+    // UMM entry point (Info.json's EntryMethod points at Load).
     internal static class Startup
     {
         internal static UnityModManager.ModEntry ModEntry;
@@ -14,7 +14,7 @@ namespace AdofaiHighway
 
         private static HighwayBehaviour behaviour;
         private static Harmony harmony;
-        private static Texture2D whiteTex;   // for the colour swatch in the settings GUI
+        private static Texture2D whiteTex;   // 1x1, tinted for the note-colour swatch
 
         internal static void Load(UnityModManager.ModEntry modEntry)
         {
@@ -35,12 +35,11 @@ namespace AdofaiHighway
         {
             if (enabled)
             {
-                // Hook the game's hit-error signal for the per-input timing readout.
+                // Hook the game's hit-error signal for the timing readout.
                 harmony = new Harmony(modEntry.Info.Id);
                 harmony.PatchAll(Assembly.GetExecutingAssembly());
 
-                // A dedicated GameObject that survives scene loads owns the overlay
-                // rendering, so the highway keeps drawing across level transitions.
+                // Own the overlay from a persistent object so it survives scene loads.
                 var go = new GameObject("AdofaiHighway");
                 Object.DontDestroyOnLoad(go);
                 behaviour = go.AddComponent<HighwayBehaviour>();

@@ -4,49 +4,45 @@ using UnityEngine;
 
 namespace AdofaiHighway
 {
-    // Draws the constant-speed note highway as an IMGUI overlay, scrolled by the
-    // game's own conductor clock so it stays in perfect sync (including through
-    // pauses, deaths, scrubs and speed changes — the clock handles all of those).
+    // Draws the note highway as an IMGUI overlay, scrolled by the game's conductor
+    // clock. Because that clock is the only time source, pauses, deaths, scrubs and
+    // speed changes need no special handling — the highway just follows it.
     internal sealed class HighwayBehaviour : MonoBehaviour
     {
         internal static HighwayBehaviour Instance;
 
-        // One tap per tile. We keep when it happens, whether it is a
-        // midspin, and its seqID so we can relate notes to the game's landing events.
+        // One note per tile — every tile in ADOFAI is exactly one tap. midSpin tiles
+        // are a rapid double-tap and get their own colour.
         private double[] noteTimes = new double[0];
         private bool[] noteMidspin = new bool[0];
-        private int[] noteSeqID = new int[0];
 
-        // Integer musical beats mapped to song-time, for the grid lines. Built by
-        // interpolating each tile's entryBeat/entryTime (see RebuildBeats).
+        // Parallel arrays for the beat grid: beat number beatNumber[i] falls at song
+        // time beatTimes[i].
         private double[] beatTimes = new double[0];
         private int[] beatNumber = new int[0];
 
-        // Rebuild the note list only when the loaded level changes. listFloors is a
-        // fresh List instance per level build, so identity + count is a cheap guard.
+        // listFloors is rebuilt as a new List per level, so a changed reference or
+        // count means a new level is loaded.
         private object lastFloorsRef;
         private int lastFloorsCount = -1;
 
-        // Auto-calibration. songposition_minusv and entryTime differ by the game's
-        // (input/visual) calibration constants, which we can't read reliably — so we
-        // *measure* the offset from reality: each time the planet lands on a tile
-        // (scrController.currentSeqID increments), we compare that tile's entryTime to
-        // the clock at the landing frame. That aligns the hit line with the true beat
-        // regardless of the player's calibration settings or song pitch.
-        private double autoOffset;        // seconds; add to the clock
-        private bool haveOffset;
+        // The conductor clock and a tile's entryTime differ by an unknown but constant
+        // calibration offset. Rather than guess it, we measure it from real landings
+        // (see TrackLandings) so the hit line sits on the true beat.
+        private double autoOffsetSeconds;
+        private bool hasCalibrated;
         private int lastSeenSeqID = SeqUnset;
         private const int SeqUnset = -999;
 
-        // Last hit's timing error, fed by HitErrorPatch. >0 = late, <0 = early (ms).
+        // Most recent hit's timing error, set by RecordHit. Positive = late, negative = early.
         private static float lastErrorMs;
-        private static float lastErrorAt = -999f;   // Time.unscaledTime of the hit
+        private static float lastErrorAt = -999f;   // Time.unscaledTime of that hit
         private const float ErrorDisplaySeconds = 1.3f;
 
         private Texture2D pixel;
         private GUIStyle errorStyle;
 
-        // Called from the AddHit Harmony postfix on every judged input.
+        // Called from HitErrorPatch on every judged input.
         internal static void RecordHit(float angleDiff, scrFloor hitFloor)
         {
             var conductor = ADOBase.conductor;
@@ -62,9 +58,9 @@ namespace AdofaiHighway
                 return;
             }
 
-            // scrMisc.AngleToTime but WITHOUT its mod(angle, 2pi): the wrap would turn a
-            // small "early" (negative) error into nearly a full beat. One beat = pi rad
-            // = 60/bpm seconds; divide by pitch for real (wall-clock) time.
+            // Mirrors scrMisc.AngleToTime (one beat = pi radians = 60/bpm seconds) but
+            // omits its mod(angle, 2pi): that wrap would turn a small early (negative)
+            // error into nearly a full beat. Dividing by pitch gives wall-clock time.
             double errSeconds = angleDiff / Math.PI * (60.0 / bpmTimesSpeed) / pitch;
             lastErrorMs = (float)(errSeconds * 1000.0);
             lastErrorAt = Time.unscaledTime;
@@ -77,9 +73,9 @@ namespace AdofaiHighway
             pixel.SetPixel(0, 0, Color.white);
             pixel.Apply();
 
-            // Seed from last session's measurement so early notes are already close.
-            autoOffset = Startup.Settings.autoOffsetMs / 1000.0;
-            haveOffset = Startup.Settings.autoOffsetMs != 0f;
+            // Seed from the last session so the first notes of a level are already close.
+            autoOffsetSeconds = Startup.Settings.autoOffsetMs / 1000.0;
+            hasCalibrated = Startup.Settings.autoOffsetMs != 0f;
         }
 
         private void OnDestroy()
@@ -96,8 +92,8 @@ namespace AdofaiHighway
 
         internal void ResetCalibration()
         {
-            autoOffset = 0.0;
-            haveOffset = false;
+            autoOffsetSeconds = 0.0;
+            hasCalibrated = false;
             Startup.Settings.autoOffsetMs = 0f;
         }
 
@@ -116,7 +112,7 @@ namespace AdofaiHighway
                 RebuildBeats(floors);
                 lastFloorsRef = floors;
                 lastFloorsCount = floors.Count;
-                lastSeenSeqID = SeqUnset;   // don't measure across a level change
+                lastSeenSeqID = SeqUnset;   // don't measure calibration across a level change
             }
 
             TrackLandings(floors);
@@ -126,11 +122,8 @@ namespace AdofaiHighway
         {
             var times = new List<double>(floors.Count);
             var midspins = new List<bool>(floors.Count);
-            var ids = new List<int>(floors.Count);
 
-            // Floor 0 is the starting tile — the planet begins there, so there is no
-            // input for it. The first tap lands on floor 1. Decorative/fake tiles are
-            // not inputs either.
+            // Skip floor 0 (the planet starts there — no tap) and fake/decorative tiles.
             for (int i = 1; i < floors.Count; i++)
             {
                 var f = floors[i];
@@ -141,25 +134,22 @@ namespace AdofaiHighway
 
                 times.Add(f.entryTime);
                 midspins.Add(f.midSpin);
-                ids.Add(f.seqID);
             }
 
             noteTimes = times.ToArray();
             noteMidspin = midspins.ToArray();
-            noteSeqID = ids.ToArray();
         }
 
-        // Place a marker at every integer beat by interpolating between tiles. entryBeat
-        // already bakes in speed changes/pauses, so linear interpolation within each
-        // tile-to-tile segment (constant bpm there) gives musically-correct beat times.
-        // Floor 0's entryBeat is a -1 sentinel and the final floor is left unset, so we
-        // only walk the valid interior floors.
+        // entryBeat is cumulative musical beats (it already bakes in speed changes and
+        // pauses), and within a tile-to-tile segment beat maps linearly to time, so we
+        // interpolate to place a marker on every integer beat. Floor 0's entryBeat is a
+        // -1 sentinel and the last floor is left unset, so only interior floors qualify.
         private void RebuildBeats(List<scrFloor> floors)
         {
             var times = new List<double>();
             var numbers = new List<int>();
 
-            for (int i = 1; i + 1 < floors.Count - 1; i++)
+            for (int i = 1; i < floors.Count - 2; i++)
             {
                 var a = floors[i];
                 var b = floors[i + 1];
@@ -173,10 +163,11 @@ namespace AdofaiHighway
                 double span = beatB - beatA;
                 if (span <= 0.0)
                 {
-                    continue;   // no forward progress (sentinel/degenerate) — skip
+                    continue;
                 }
 
-                // Each integer beat that falls in [beatA, beatB).
+                // Half-open [beatA, beatB) so a beat landing on a tile boundary is
+                // emitted once, by the segment that starts on it.
                 for (int beat = (int)Math.Ceiling(beatA - 1e-6); beat < beatB - 1e-6; beat++)
                 {
                     double frac = (beat - beatA) / span;
@@ -189,7 +180,7 @@ namespace AdofaiHighway
             beatNumber = numbers.ToArray();
         }
 
-        // Refine autoOffset from the game's real landing events.
+        // Measure the calibration offset from the game's real landing events.
         private void TrackLandings(List<scrFloor> floors)
         {
             var controller = ADOBase.controller;
@@ -208,7 +199,7 @@ namespace AdofaiHighway
             int prev = lastSeenSeqID;
             lastSeenSeqID = cur;
 
-            // Only trust a plain forward step for measurement — big/backward jumps are
+            // Only a plain forward step is a real landing. Big or backward jumps are
             // scrubs, checkpoints or restarts, where the half-frame estimate is invalid.
             double delta = conductor.deltaSongPos;
             bool normalAdvance = prev != SeqUnset && cur > prev && (cur - prev) <= 4
@@ -218,20 +209,20 @@ namespace AdofaiHighway
                 return;
             }
 
-            // We notice the landing up to one frame late, so the true landing happened
-            // roughly half a frame's worth of song-time before the current clock read.
+            // The landing is noticed up to a frame late, so it truly happened about
+            // half a frame's worth of song-time before this clock reading.
             double half = delta > 0.0 ? 0.5 * delta : 0.0;
             double measured = floors[cur].entryTime - (conductor.songposition_minusv - half);
 
-            // Snap on the first sample, then lerp to filter per-frame quantization jitter.
-            autoOffset = haveOffset ? autoOffset + (measured - autoOffset) * 0.25 : measured;
-            haveOffset = true;
-            Startup.Settings.autoOffsetMs = (float)(autoOffset * 1000.0);
+            // Snap on the first sample, then lerp to smooth per-frame jitter.
+            autoOffsetSeconds = hasCalibrated ? autoOffsetSeconds + (measured - autoOffsetSeconds) * 0.25 : measured;
+            hasCalibrated = true;
+            Startup.Settings.autoOffsetMs = (float)(autoOffsetSeconds * 1000.0);
         }
 
         private void OnGUI()
         {
-            // We only draw (no interactive controls), so skip the Layout/input passes.
+            // Draw-only overlay: skip the layout/input IMGUI passes.
             if (Event.current.type != EventType.Repaint || noteTimes.Length == 0)
             {
                 return;
@@ -244,7 +235,7 @@ namespace AdofaiHighway
             }
 
             var s = Startup.Settings;
-            double now = conductor.songposition_minusv + autoOffset + s.offsetMs / 1000.0;
+            double now = conductor.songposition_minusv + autoOffsetSeconds + s.offsetMs / 1000.0;
 
             float laneHeight = Screen.height * s.laneHeightFraction;
             float laneTop = (Screen.height - laneHeight) * 0.5f;
@@ -252,88 +243,84 @@ namespace AdofaiHighway
             float laneLeft = Screen.width - s.laneWidth - s.rightMargin;
             float hitLineY = laneBottom - s.hitLineFromBottom;
 
-            // Lane backdrop.
             DrawRect(laneLeft, laneTop, s.laneWidth, laneHeight, new Color(0f, 0f, 0f, s.laneOpacity));
 
-            float visibleAbove = hitLineY - laneTop;               // px of lookahead
-            double leadSeconds = visibleAbove / s.pixelsPerSecond;
+            float lookaheadPixels = hitLineY - laneTop;
+            double leadSeconds = lookaheadPixels / s.pixelsPerSecond;
 
-            // Beat grid, under the notes: faint line per beat, brighter per measure.
+            // Beat grid, drawn under the notes and only above the hit line.
             if (s.showBeatLines)
             {
                 int perMeasure = Mathf.Max(1, s.beatsPerMeasure);
                 for (int i = 0; i < beatTimes.Length; i++)
                 {
-                    double dt = beatTimes[i] - now;
-                    if (dt < 0.0 || dt > leadSeconds)
+                    double secondsUntil = beatTimes[i] - now;
+                    if (secondsUntil < 0.0 || secondsUntil > leadSeconds)
                     {
-                        continue;   // only the approaching grid, above the hit line
+                        continue;
                     }
 
-                    float y = hitLineY - (float)(dt * s.pixelsPerSecond);
+                    float y = hitLineY - (float)(secondsUntil * s.pixelsPerSecond);
                     bool measure = beatNumber[i] % perMeasure == 0;
-                    float a = Mathf.Clamp01(s.beatLineOpacity * (measure ? 2f : 1f));
-                    DrawRect(laneLeft, y, s.laneWidth, measure ? 2f : 1f, new Color(1f, 1f, 1f, a));
+                    float alpha = Mathf.Clamp01(s.beatLineOpacity * (measure ? 2f : 1f));
+                    DrawRect(laneLeft, y, s.laneWidth, measure ? 2f : 1f, new Color(1f, 1f, 1f, alpha));
                 }
             }
 
-            // A note lands exactly when it reaches the hit line; instead of drifting on
-            // past (which blurred the moment of impact), a landed note pins to the line
-            // and fades out fast, and the line flashes — a crisp "tap now" cue.
+            // A note reaches the hit line at its time; past that it pins to the line and
+            // fades quickly (rather than sliding on past) while the line flashes.
             const double fadeSeconds = 0.12;
-            double mostRecentLanding = double.PositiveInfinity;
+            double secondsSinceLanding = double.PositiveInfinity;
 
             for (int i = 0; i < noteTimes.Length; i++)
             {
-                double dt = noteTimes[i] - now;   // >0 upcoming, <=0 already landed
-                if (dt > leadSeconds)
+                double secondsUntil = noteTimes[i] - now;
+                if (secondsUntil > leadSeconds)
                 {
                     continue;
                 }
 
                 float y;
                 float alpha;
-                if (dt >= 0.0)
+                if (secondsUntil >= 0.0)
                 {
-                    y = hitLineY - (float)(dt * s.pixelsPerSecond);
+                    y = hitLineY - (float)(secondsUntil * s.pixelsPerSecond);
                     alpha = 0.95f;
                 }
                 else
                 {
-                    double pastBy = -dt;
+                    double pastBy = -secondsUntil;
                     if (pastBy > fadeSeconds)
                     {
-                        continue;   // fully faded — cull
+                        continue;
                     }
-                    if (pastBy < mostRecentLanding)
+                    if (pastBy < secondsSinceLanding)
                     {
-                        mostRecentLanding = pastBy;
+                        secondsSinceLanding = pastBy;
                     }
                     y = hitLineY;
                     alpha = 0.95f * (1f - (float)(pastBy / fadeSeconds));
                 }
 
                 Color c = noteMidspin[i]
-                    ? new Color(1f, 0.55f, 0.1f, alpha)                       // midspin: fixed orange accent
-                    : new Color(s.noteColorR, s.noteColorG, s.noteColorB, alpha);  // normal: user colour
+                    ? new Color(1f, 0.55f, 0.1f, alpha)
+                    : new Color(s.noteColorR, s.noteColorG, s.noteColorB, alpha);
                 DrawRect(laneLeft, y - 2f, s.laneWidth, 4f, c);
             }
 
-            // Flash the hit line for a moment after any note lands.
-            if (mostRecentLanding < fadeSeconds)
+            if (secondsSinceLanding < fadeSeconds)
             {
-                float glow = 1f - (float)(mostRecentLanding / fadeSeconds);
+                float glow = 1f - (float)(secondsSinceLanding / fadeSeconds);
                 DrawRect(laneLeft, hitLineY - 8f, s.laneWidth, 16f, new Color(1f, 0.95f, 0.4f, 0.55f * glow));
             }
 
-            // Hit line drawn last so it stays sharp on top of notes and glow.
+            // Hit line last, so it stays crisp over the notes and glow.
             DrawRect(laneLeft, hitLineY - 1.5f, s.laneWidth, 3f, new Color(1f, 1f, 1f, 0.9f));
 
             DrawErrorReadout(laneLeft, hitLineY, s.laneWidth);
         }
 
-        // Small "12 ms" readout beside the hit line showing how early/late the last
-        // input was: negative/blue = early, positive/red = late, tight = green.
+        // The last hit's early/late error beside the hit line, fading out over time.
         private void DrawErrorReadout(float laneLeft, float hitLineY, float laneWidth)
         {
             float age = Time.unscaledTime - lastErrorAt;
@@ -344,10 +331,10 @@ namespace AdofaiHighway
 
             int ms = Mathf.RoundToInt(lastErrorMs);
             float mag = Mathf.Abs(lastErrorMs);
-            Color c = mag <= 15f ? new Color(0.4f, 1f, 0.5f)     // tight: green
+            Color c = mag <= 15f ? new Color(0.4f, 1f, 0.5f)         // tight: green
                     : lastErrorMs < 0f ? new Color(0.4f, 0.75f, 1f)  // early: blue
-                    : new Color(1f, 0.5f, 0.4f);                 // late: red
-            c.a = 1f - age / ErrorDisplaySeconds;                // fade out
+                    : new Color(1f, 0.5f, 0.4f);                     // late: red
+            c.a = 1f - age / ErrorDisplaySeconds;
 
             if (errorStyle == null)
             {

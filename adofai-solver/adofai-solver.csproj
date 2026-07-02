@@ -14,7 +14,7 @@
     <Deterministic>true</Deterministic>
   </PropertyGroup>
 
-  <!-- This machine's game install. -->
+  <!-- This machine's game install (absolute local paths). -->
   <PropertyGroup>
     <GameDir>D:\SteamLibrary\steamapps\common\A Dance of Fire and Ice</GameDir>
     <ManagedDir>$(GameDir)\A Dance of Fire and Ice_Data\Managed</ManagedDir>
