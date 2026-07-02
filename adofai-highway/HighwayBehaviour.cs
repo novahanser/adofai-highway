@@ -60,10 +60,14 @@ namespace AdofaiHighway
                 return;
             }
 
-            // Mirrors scrMisc.AngleToTime (one beat = pi radians = 60/bpm seconds) but
-            // omits its mod(angle, 2pi): that wrap would turn a small early (negative)
-            // error into nearly a full beat. Dividing by pitch gives wall-clock time.
-            double errSeconds = angleDiff / Math.PI * (60.0 / bpmTimesSpeed) / pitch;
+            // The planet's angle accumulates unwrapped, so angleDiff can arrive offset
+            // by whole revolutions (extra spins, multi-tap presses, a stale reference
+            // just after a restart). Fold into (-pi, pi] to recover the signed
+            // sub-revolution error — a counted hit is always well within that window.
+            // One beat = pi radians = 60/bpm seconds; divide by pitch for wall-clock ms.
+            double twoPi = 2.0 * Math.PI;
+            double wrapped = angleDiff - twoPi * Math.Round(angleDiff / twoPi);
+            double errSeconds = wrapped / Math.PI * (60.0 / bpmTimesSpeed) / pitch;
             lastErrorMs = (float)(errSeconds * 1000.0);
             lastErrorAt = Time.unscaledTime;
         }
