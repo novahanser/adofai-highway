@@ -3,12 +3,12 @@ using HarmonyLib;
 namespace AdofaiHighway
 {
     // The game computes a precise, sub-frame angular error for each hit and passes it
-    // to its own error meter; we read it from there instead of timing inputs against
+    // to its own error meter. We read it from there instead of timing inputs against
     // our frame-quantized clock.
     //
     // But the meter is fed for EVERY press, including ones the game swallows without
     // scoring (a too-early press just after a hold, the first taps of a multipress,
-    // over-presses). The scoreboard tracker is only fed for presses that were really
+    // over-presses, etc). The scoreboard tracker is only fed for presses that were really
     // judged, and both run inside the same Hit() call, so the two hooks are paired:
     // the tracker's margin arms a readout that the meter hook fills with measured ms.
     [HarmonyPatch(typeof(scrMarginTracker), nameof(scrMarginTracker.AddHit))]
