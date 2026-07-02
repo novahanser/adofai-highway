@@ -1,9 +1,7 @@
 # ADOFAI Note Highway
 
 A [UnityModManager](https://www.nexusmods.com/site/mods/21) mod for *A Dance of Fire and Ice*
-that draws a scrolling, Guitar-Hero-style note highway in sync with the song — one bar per tap,
-with beat/measure lines and a live early/late timing readout. Midspin and multitap tiles get
-their own colours.
+that draws a scrolling note highway in sync with the song.
 
 ## Install
 
