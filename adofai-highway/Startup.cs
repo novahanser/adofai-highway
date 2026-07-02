@@ -111,7 +111,6 @@ namespace AdofaiHighway
             Settings.Save(modEntry);
         }
 
-        // Colour swatch plus one slider per channel, each labelled with its 0..255 value.
         private static void ColorField(string label, ref float r, ref float g, ref float b)
         {
             GUILayout.BeginHorizontal();
