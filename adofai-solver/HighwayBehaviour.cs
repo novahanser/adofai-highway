@@ -11,10 +11,12 @@ namespace AdofaiHighway
     {
         internal static HighwayBehaviour Instance;
 
-        // One note per tile — every tile in ADOFAI is exactly one tap. midSpin tiles
-        // are a rapid double-tap and get their own colour.
+        private enum NoteKind { Normal, Midspin, Multitap }
+
+        // One note per tile. Midspin (a rapid double-tap) and multitap (two keys at
+        // once) tiles each get their own colour.
         private double[] noteTimes = new double[0];
-        private bool[] noteMidspin = new bool[0];
+        private NoteKind[] noteKind = new NoteKind[0];
 
         // Parallel arrays for the beat grid: beat number beatNumber[i] falls at song
         // time beatTimes[i].
@@ -121,7 +123,7 @@ namespace AdofaiHighway
         private void RebuildNotes(List<scrFloor> floors)
         {
             var times = new List<double>(floors.Count);
-            var midspins = new List<bool>(floors.Count);
+            var kinds = new List<NoteKind>(floors.Count);
 
             // Skip floor 0 (the planet starts there — no tap) and fake/decorative tiles.
             for (int i = 1; i < floors.Count; i++)
@@ -133,11 +135,22 @@ namespace AdofaiHighway
                 }
 
                 times.Add(f.entryTime);
-                midspins.Add(f.midSpin);
+                kinds.Add(Classify(f));
             }
 
             noteTimes = times.ToArray();
-            noteMidspin = midspins.ToArray();
+            noteKind = kinds.ToArray();
+        }
+
+        // tapsNeeded > 1 is a multitap (two keys at once); it takes priority as the
+        // most demanding input to convey.
+        private static NoteKind Classify(scrFloor f)
+        {
+            if (f.tapsNeeded > 1)
+            {
+                return NoteKind.Multitap;
+            }
+            return f.midSpin ? NoteKind.Midspin : NoteKind.Normal;
         }
 
         // entryBeat is cumulative musical beats (it already bakes in speed changes and
@@ -302,9 +315,19 @@ namespace AdofaiHighway
                     alpha = 0.95f * (1f - (float)(pastBy / fadeSeconds));
                 }
 
-                Color c = noteMidspin[i]
-                    ? new Color(1f, 0.55f, 0.1f, alpha)
-                    : new Color(s.noteColorR, s.noteColorG, s.noteColorB, alpha);
+                Color c;
+                switch (noteKind[i])
+                {
+                    case NoteKind.Midspin:
+                        c = new Color(1f, 0.55f, 0.1f, alpha);   // orange
+                        break;
+                    case NoteKind.Multitap:
+                        c = new Color(0.75f, 0.4f, 1f, alpha);   // violet
+                        break;
+                    default:
+                        c = new Color(s.noteColorR, s.noteColorG, s.noteColorB, alpha);
+                        break;
+                }
                 DrawRect(laneLeft, y - 2f, s.laneWidth, 4f, c);
             }
 
