@@ -36,26 +36,57 @@ namespace AdofaiHighway
         private int lastSeenSeqID = SeqUnset;
         private const int SeqUnset = -999;
 
-        // Most recent hit's timing error, set by RecordHit. Positive = late, negative
-        // = early. Degrees is tempo-independent and matches the game's angle-based
-        // judgment; ms is the wall-clock equivalent for display.
+        // Most recent scored hit's timing error, set by RecordHit. Positive = late,
+        // negative = early. The word and colour come from the judgment the game itself
+        // recorded, so the readout always agrees with the hit text the game shows.
         private static float lastErrorMs;
-        private static float lastErrorDeg;
+        private static string lastJudgment = "";
+        private static Color lastJudgmentColor = Color.white;
         private static float lastErrorAt = -999f;   // Time.unscaledTime of that hit
         private const float ErrorDisplaySeconds = 1.3f;
+
+        // Judgment the game just recorded on the scoreboard, held until the error
+        // meter call later in the same Hit() supplies the matching angular error.
+        private static HitMargin pendingMargin;
+        private static int pendingMarginFrame = -1;
 
         private Texture2D pixel;
         private GUIStyle errorStyle;
 
-        // Called from HitErrorPatch on every judged input.
-        internal static void RecordHit(float angleDiff, scrFloor hitFloor)
+        // Called from JudgmentPatch whenever the game records a judgment on the
+        // scoreboard — the signal that a press really counted.
+        internal static void RecordJudgment(HitMargin margin)
         {
+            pendingMargin = margin;
+            pendingMarginFrame = Time.frameCount;
+        }
+
+        // Called from HitErrorPatch on every input that reaches the error meter.
+        internal static void RecordHit(float angleDiff, scrPlanet planet, scrFloor hitFloor)
+        {
+            // The game scores a press just before feeding the meter, inside the same
+            // Hit() call, so a judgment recorded this frame belongs to this press. No
+            // recorded judgment means the game swallowed the press without scoring it
+            // (hold grace, multipress part, over-press) and shows nothing for it —
+            // mirror that rather than report a phantom miss.
+            if (pendingMarginFrame != Time.frameCount)
+            {
+                return;
+            }
+            pendingMarginFrame = -1;
+
             var conductor = ADOBase.conductor;
             if (conductor == null)
             {
                 return;
             }
 
+            // Same tile-speed source as the game's AddHit: the hit floor, or the floor
+            // the planet just left when the caller passed none.
+            if (hitFloor == null && planet != null && planet.player != null && planet.player.currFloor != null)
+            {
+                hitFloor = planet.player.currFloor.prevfloor;
+            }
             double bpmTimesSpeed = conductor.bpm * (hitFloor != null ? hitFloor.speed : 1.0);
             double pitch = conductor.song != null ? conductor.song.pitch : 1.0;
             if (bpmTimesSpeed <= 0.0 || pitch <= 0.0)
@@ -72,9 +103,31 @@ namespace AdofaiHighway
             double wrapped = angleDiff - twoPi * Math.Round(angleDiff / twoPi);
             double errSeconds = wrapped / Math.PI * (60.0 / bpmTimesSpeed) / pitch;
             lastErrorMs = (float)(errSeconds * 1000.0);
-            lastErrorDeg = (float)(wrapped * (180.0 / Math.PI));
+            lastJudgment = JudgmentWord(pendingMargin);
+            lastJudgmentColor = JudgmentColor(pendingMargin);
             lastErrorAt = Time.unscaledTime;
         }
+
+        // Compact names for the game's HitMargin values; early/late is baked into the
+        // E/L prefixes. Auto tiles are scored as Auto but hit dead-centre, and anything
+        // outside the counted window reads as a miss.
+        private static string JudgmentWord(HitMargin margin) => margin switch
+        {
+            HitMargin.Perfect or HitMargin.Auto => "Perfect",
+            HitMargin.EarlyPerfect => "EPerfect",
+            HitMargin.LatePerfect => "LPerfect",
+            HitMargin.VeryEarly => "Early",
+            HitMargin.VeryLate => "Late",
+            _ => "Miss",
+        };
+
+        private static Color JudgmentColor(HitMargin margin) => margin switch
+        {
+            HitMargin.Perfect or HitMargin.Auto => new Color(0.4f, 1f, 0.5f),          // green
+            HitMargin.EarlyPerfect or HitMargin.LatePerfect => new Color(0.75f, 1f, 0.35f), // lime
+            HitMargin.VeryEarly or HitMargin.VeryLate => new Color(1f, 0.65f, 0.2f),   // orange
+            _ => new Color(1f, 0.4f, 0.35f),                                           // red
+        };
 
         private void Awake()
         {
@@ -361,13 +414,7 @@ namespace AdofaiHighway
             }
 
             int ms = Mathf.RoundToInt(lastErrorMs);
-            // Colour by the game's angle-based judgment (tempo-independent): Perfect
-            // <=30 deg, E/L-Perfect <=45, Early/Late <=60 (still counts), else miss.
-            float absDeg = Mathf.Abs(lastErrorDeg);
-            Color c = absDeg <= 30f ? new Color(0.4f, 1f, 0.5f)     // Perfect: green
-                    : absDeg <= 45f ? new Color(0.75f, 1f, 0.35f)   // E/L-Perfect: lime
-                    : absDeg <= 60f ? new Color(1f, 0.65f, 0.2f)    // Early/Late: orange
-                    : new Color(1f, 0.4f, 0.35f);                   // miss: red
+            Color c = lastJudgmentColor;
             c.a = 1f - age / ErrorDisplaySeconds;
 
             if (errorStyle == null)
@@ -378,21 +425,9 @@ namespace AdofaiHighway
             errorStyle.alignment = TextAnchor.MiddleRight;
             errorStyle.normal.textColor = c;
 
-            var content = new GUIContent($"{Judgment(lastErrorDeg)}  {ms:+0;-0;0} ms");
+            var content = new GUIContent($"{lastJudgment}  {ms:+0;-0;0} ms");
             Vector2 size = errorStyle.CalcSize(content);
             GUI.Label(new Rect(laneLeft - size.x - 8f, hitLineY - size.y * 0.5f, size.x, size.y), content, errorStyle);
-        }
-
-        // The game's judgment name for an angular error (see the wiki's Judgement
-        // table). Sign gives early (<0) vs late (>0).
-        private static string Judgment(float deg)
-        {
-            float a = Mathf.Abs(deg);
-            bool early = deg < 0f;
-            if (a <= 30f) return "Perfect";
-            if (a <= 45f) return early ? "EPerfect" : "LPerfect";
-            if (a <= 60f) return early ? "Early" : "Late";
-            return "Miss";
         }
 
         private void DrawRect(float x, float y, float w, float h, Color color)
