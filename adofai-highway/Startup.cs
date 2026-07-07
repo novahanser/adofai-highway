@@ -38,7 +38,6 @@ namespace AdofaiHighway
                 harmony = new Harmony(modEntry.Info.Id);
                 harmony.PatchAll(Assembly.GetExecutingAssembly());
 
-                // Own the overlay from a persistent object so it survives scene loads.
                 var go = new GameObject("AdofaiHighway");
                 Object.DontDestroyOnLoad(go);
                 behaviour = go.AddComponent<HighwayBehaviour>();
