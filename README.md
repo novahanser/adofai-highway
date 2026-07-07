@@ -16,3 +16,7 @@ This is purely a for-fun project. The highway is a visual assist, and using it o
 leaderboard maps would count as cheating under the rules of those communities.
 Check the rules of any ranking system before playing with the mod enabled, and keep it off where assists aren't allowed.
 Use common sense; I take no responsibility if you ignore this and get yourself banned.
+
+## Preview
+
+[Preview video](https://www.youtube.com/watch?v=TrtfApyTOkE)
