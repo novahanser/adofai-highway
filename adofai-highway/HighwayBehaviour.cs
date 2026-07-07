@@ -299,7 +299,7 @@ namespace AdofaiHighway
             int prev = lastSeenSeqID;
             lastSeenSeqID = cur;
 
-            // Only a plain forward step is a real landing — up to a few tiles, since a fast map can cross several in one frame.
+            // Only a plain forward step is a real landing, up to a few tiles, since a fast map can cross several in one frame.
             // Bigger or backward jumps are scrubs, checkpoints or restarts, where the half-frame estimate is invalid.
             double frameDelta = conductor.deltaSongPos;
             bool normalAdvance = prev != SeqUnset && cur > prev && (cur - prev) <= 4
