@@ -9,23 +9,26 @@ namespace AdofaiHighway
     {
         internal static HighwayBehaviour Instance;
 
-        // Midspin = the tile's rapid double-tap variant.
-        // Multitap = several keys at once.
-        // Multitaps are represented as two thinner stacked lines of a different color
-        // to normal notes.
-        private enum NoteKind { Normal, Midspin, Multitap }
+        private enum NoteKind { Normal, Multitap }
 
         private readonly struct Note
         {
             public readonly double Time;
             public readonly NoteKind Kind;
             public readonly double ReleaseTime;
+            public readonly double DisplayTime;
+            public readonly int Lane, GroupSize, OverflowCount;
 
-            public Note(double time, NoteKind kind, double releaseTime)
+            public Note(double time, NoteKind kind, double releaseTime, double displayTime,
+                int lane, int groupSize, int overflowCount = 0)
             {
                 Time = time;
                 Kind = kind;
                 ReleaseTime = releaseTime;
+                DisplayTime = displayTime;
+                Lane = lane;
+                GroupSize = groupSize;
+                OverflowCount = overflowCount;
             }
 
             public bool IsHold => ReleaseTime > Time;
@@ -43,20 +46,33 @@ namespace AdofaiHighway
             }
         }
 
+        private readonly struct OverflowMarker
+        {
+            internal readonly double Time, Release;
+            internal readonly long Count;
+            internal readonly string ShortLabel;
+            internal OverflowMarker(double time, double release, long count)
+            {
+                Time = time;
+                Release = release;
+                Count = count;
+                ShortLabel = $"+{count}";
+            }
+        }
+
+        private OverflowMarker[] overflowMarkers = new OverflowMarker[0];
         private Note[] notes = new Note[0];
+        private RhythmEvent[] sourceEvents = new RhythmEvent[0];
+        private double[] lastVisiblePrefix = new double[0];
         private BeatMarker[] beatMarkers = new BeatMarker[0];
+        private bool chartDirty = true;
+        private int lastAssignmentSettings;
+        private double lastPlaybackSpeed = -1;
+        private bool lastHitOnce;
 
         // listFloors is rebuilt as a new List per level, so a changed reference or count means a new level is loaded.
         private List<scrFloor> lastFloors;
         private int lastFloorsCount = -1;
-
-        // The conductor clock and a tile's entryTime differ by an unknown but constant
-        // calibration offset. Rather than guess it, we measure it from real landings
-        // (see TrackLandings) so the hit line sits on the true beat.
-        private double autoOffsetSeconds;
-        private bool hasCalibrated;
-        private int lastSeenSeqID = SeqUnset;
-        private const int SeqUnset = -999;
 
         // Most recent scored hit's timing error, set by RecordHit. Positive = late,
         // negative = early. The word and colour come from the judgment the game itself
@@ -85,6 +101,10 @@ namespace AdofaiHighway
 
         private Texture2D pixel;
         private GUIStyle errorStyle;
+        private GUIStyle laneLabelStyle, overflowStyle;
+        private static readonly string[] LaneLabels = { "1", "2", "3", "4", "5", "6", "7", "8" };
+
+        internal void InvalidateChart() => chartDirty = true;
 
         internal static void RecordJudgment(HitMargin margin)
         {
@@ -166,9 +186,7 @@ namespace AdofaiHighway
             pixel.SetPixel(0, 0, Color.white);
             pixel.Apply();
 
-            // Seed from the last session so the first notes of a level are already close.
-            autoOffsetSeconds = Startup.Settings.autoOffsetMs / 1000.0;
-            hasCalibrated = Startup.Settings.autoOffsetMs != 0f;
+            RefreshClockCalibration();
         }
 
         private void OnDestroy()
@@ -185,9 +203,18 @@ namespace AdofaiHighway
 
         internal void ResetCalibration()
         {
-            autoOffsetSeconds = 0.0;
-            hasCalibrated = false;
-            Startup.Settings.autoOffsetMs = 0f;
+            RefreshClockCalibration();
+        }
+
+        private static void RefreshClockCalibration()
+        {
+            // The game itself compares entryTime to songposition_minusi for hold
+            // progress. Display its exact input-vs-visual correction in the menu;
+            // never estimate it from a player's early/late landings.
+            var conductor = ADOBase.conductor;
+            Startup.Settings.autoOffsetMs = conductor != null
+                ? (float)((conductor.songposition_minusi - conductor.songposition_minusv) * 1000.0)
+                : 0f;
         }
 
         private void Update()
@@ -196,57 +223,140 @@ namespace AdofaiHighway
             var floors = lm != null ? lm.listFloors : null;
             if (floors == null)
             {
+                if (lastFloors != null)
+                {
+                    notes = new Note[0];
+                    sourceEvents = new RhythmEvent[0];
+                    overflowMarkers = new OverflowMarker[0];
+                    beatMarkers = new BeatMarker[0];
+                    lastVisiblePrefix = new double[0];
+                    lastFloors = null;
+                    lastFloorsCount = -1;
+                    chartDirty = true;
+                }
                 return;
             }
 
-            if (!ReferenceEquals(floors, lastFloors) || floors.Count != lastFloorsCount)
+            bool hitOnce = Persistence.multiTapTileBehavior == MultitapTileBehavior.HitOnce;
+            bool rebuild = chartDirty || !ReferenceEquals(floors, lastFloors)
+                || floors.Count != lastFloorsCount || hitOnce != lastHitOnce;
+            if (rebuild)
             {
                 RebuildNotes(floors);
                 RebuildBeatMarkers(floors);
                 lastFloors = floors;
                 lastFloorsCount = floors.Count;
-                lastSeenSeqID = SeqUnset; // don't measure calibration across a level change
+                lastHitOnce = hitOnce;
+                chartDirty = false;
             }
 
-            TrackLandings(floors);
+            var settings = Startup.Settings;
+            var conductor = ADOBase.conductor;
+            double speed = settings.followPlaybackSpeed && conductor != null && conductor.song != null
+                ? conductor.song.pitch : 1.0;
+            if (speed <= 0 || double.IsNaN(speed) || double.IsInfinity(speed)) speed = 1.0;
+            int signature = AssignmentSignature(settings);
+            if (rebuild || signature != lastAssignmentSettings || Math.Abs(speed - lastPlaybackSpeed) > 0.0001)
+            {
+                RebuildAssignments(settings, speed);
+                lastAssignmentSettings = signature;
+                lastPlaybackSpeed = speed;
+            }
+
+            RefreshClockCalibration();
         }
 
         private void RebuildNotes(List<scrFloor> floors)
         {
-            var result = new List<Note>(floors.Count);
-
-            // Skip floor 0 (the planet starts there) and every tile the player never presses: fake/decorative tiles, AutoPlayTiles sections the game hits by
-            // itself, and freeroam tiles (untimed by definition).
-            for (int i = 1; i < floors.Count; i++)
+            var snapshot = new FloorTiming[floors.Count];
+            var conductor = ADOBase.conductor;
+            double baseBpm = conductor != null ? conductor.bpm : 120;
+            bool hitOnce = Persistence.multiTapTileBehavior == MultitapTileBehavior.HitOnce;
+            for (int i = 0; i < floors.Count; i++)
             {
                 var floor = floors[i];
-                if (floor == null || floor.isFake || floor.auto || floor.freeroam)
+                if (floor == null)
                 {
+                    snapshot[i] = new FloorTiming(0, fake: true);
                     continue;
                 }
-
-                // A hold (holdLength ≥ 0, in extra planet loops) is pressed on its own tile and released on arrival at the next tile.
-                // The game judges the release as the next tile's hit and the hold loops are already baked into that tile's entryTime, so the held span is exactly entry-to-entry.
-                double releaseTime = floor.holdLength > -1 && floor.nextfloor != null
-                    ? floor.nextfloor.entryTime
-                    : floor.entryTime;
-                result.Add(new Note(floor.entryTime, Classify(floor), releaseTime));
+                // angleLength is OUTGOING travel in radians (already includes holds
+                // and planet/direction changes); entryTime is the game's song clock.
+                snapshot[i] = new FloorTiming(floor.entryTime,
+                    floor.angleLength * 180.0 / Math.PI + floor.extraBeats * 180.0,
+                    baseBpm * floor.speed, floor.isFake, floor.auto, floor.freeroam,
+                    floor.midSpin, floor.holdLength > -1, hitOnce ? 1 : floor.tapsNeeded);
             }
-
-            notes = result.ToArray();
+            sourceEvents = ChartEventBuilder.Build(snapshot);
         }
 
-        // Multitap takes priority as the most demanding input to convey.
-        private static NoteKind Classify(scrFloor floor)
+        private static int AssignmentSignature(Settings s)
         {
-            if (floor.tapsNeeded > 1)
+            unchecked
             {
-                return NoteKind.Multitap;
+                int hash = s.laneCount * 397 + s.splitMode;
+                hash = hash * 397 + s.singleKps.GetHashCode();
+                hash = hash * 397 + (s.rightHandPrimary ? 1 : 0);
+                hash = hash * 397 + (s.followPlaybackSpeed ? 1 : 0);
+                return hash * 397 + (s.mergeNearbyNotes ? 1 : 0);
             }
-            return floor.midSpin ? NoteKind.Midspin : NoteKind.Normal;
         }
 
-        // entryBeat is cumulative musical beats (it already bakes in speed changes and pauses), and within a tile-to-tile segment beat maps linearly to time, so we
+        private void RebuildAssignments(Settings settings, double speed)
+        {
+            var result = new List<Note>();
+            if (settings.laneCount == 1)
+            {
+                foreach (var source in sourceEvents)
+                    result.Add(new Note(source.Time, source.RequiredKeys > 1 ? NoteKind.Multitap : NoteKind.Normal,
+                        source.ReleaseTime, source.Time, 0, source.RequiredKeys));
+            }
+            else
+            {
+                var options = new LaneOptions
+                {
+                    LaneCount = settings.laneCount, Mode = settings.splitMode,
+                    SingleKps = settings.singleKps, MainHandRight = settings.rightHandPrimary,
+                    FollowPlaybackSpeed = settings.followPlaybackSpeed, MergeNearby = settings.mergeNearbyNotes,
+                };
+                foreach (var assigned in LaneAllocator.Assign(sourceEvents, options, speed))
+                {
+                    var source = sourceEvents[assigned.SourceIndex];
+                    var kind = source.RequiredKeys > 1 || assigned.GroupSize > 1 ? NoteKind.Multitap : NoteKind.Normal;
+                    result.Add(new Note(assigned.Time, kind, assigned.ReleaseTime, assigned.DisplayTime,
+                        assigned.Lane, assigned.GroupSize, assigned.OverflowCount));
+                }
+            }
+            result.Sort((a, b) =>
+            {
+                int time = a.DisplayTime.CompareTo(b.DisplayTime);
+                return time != 0 ? time : a.Lane.CompareTo(b.Lane);
+            });
+            notes = result.ToArray();
+            var overflow = new List<OverflowMarker>();
+            foreach (var note in notes)
+            {
+                if (note.OverflowCount <= 0) continue;
+                int last = overflow.Count - 1;
+                if (last >= 0 && overflow[last].Time == note.DisplayTime)
+                {
+                    var previous = overflow[last];
+                    overflow[last] = new OverflowMarker(previous.Time,
+                        Math.Max(previous.Release, note.ReleaseTime), previous.Count + note.OverflowCount);
+                }
+                else overflow.Add(new OverflowMarker(note.DisplayTime, note.ReleaseTime, note.OverflowCount));
+            }
+            overflowMarkers = overflow.ToArray();
+            lastVisiblePrefix = new double[notes.Length];
+            double end = double.NegativeInfinity;
+            for (int i = 0; i < notes.Length; i++)
+            {
+                end = Math.Max(end, Math.Max(notes[i].ReleaseTime, notes[i].DisplayTime) + LandingFadeSeconds);
+                lastVisiblePrefix[i] = end;
+            }
+        }
+
+        // entryBeat is cumulative geometry (including pauses); within each tile segment we
         // interpolate to place a marker on every integer beat. Floor 0's entryBeat is a -1 sentinel and the last floor is left unset, so only interior floors qualify.
         private void RebuildBeatMarkers(List<scrFloor> floors)
         {
@@ -281,47 +391,6 @@ namespace AdofaiHighway
             beatMarkers = result.ToArray();
         }
 
-        private void TrackLandings(List<scrFloor> floors)
-        {
-            var controller = ADOBase.controller;
-            var conductor = ADOBase.conductor;
-            if (controller == null || conductor == null)
-            {
-                return;
-            }
-
-            int cur = controller.currentSeqID;
-            if (cur == lastSeenSeqID)
-            {
-                return;
-            }
-
-            int prev = lastSeenSeqID;
-            lastSeenSeqID = cur;
-
-            // Only a plain forward step is a real landing, up to a few tiles, since a fast map can cross several in one frame.
-            // Bigger or backward jumps are scrubs, checkpoints or restarts, where the half-frame estimate is invalid.
-            double frameDelta = conductor.deltaSongPos;
-            bool normalAdvance = prev != SeqUnset && cur > prev && (cur - prev) <= 4
-                                 && frameDelta > 0.0 && frameDelta < 0.5;
-            if (!normalAdvance || cur < 0 || cur >= floors.Count)
-            {
-                return;
-            }
-
-            // The landing is noticed up to a frame late,
-            // so it truly happened about half a frame's worth of song-time before this clock reading.
-            double halfFrame = 0.5 * frameDelta;
-            double measuredOffset = floors[cur].entryTime - (conductor.songposition_minusv - halfFrame);
-
-            // Snap on the first sample, then lerp to smooth per-frame jitter.
-            autoOffsetSeconds = hasCalibrated
-                ? autoOffsetSeconds + (measuredOffset - autoOffsetSeconds) * 0.25
-                : measuredOffset;
-            hasCalibrated = true;
-            Startup.Settings.autoOffsetMs = (float)(autoOffsetSeconds * 1000.0);
-        }
-
         private void OnGUI()
         {
             if (Event.current.type != EventType.Repaint || notes.Length == 0)
@@ -336,71 +405,107 @@ namespace AdofaiHighway
             }
 
             var settings = Startup.Settings;
-            double now = conductor.songposition_minusv + autoOffsetSeconds + settings.offsetMs / 1000.0;
+            // Same song-time coordinate as the game's own hold progress and input
+            // judgment. Positive manual nudge makes notes reach the line later.
+            double now = conductor.songposition_minusi - settings.offsetMs / 1000.0;
 
             float laneHeight = Screen.height * settings.laneHeightFraction;
             float laneTop = (Screen.height - laneHeight) * 0.5f;
-            float laneBottom = laneTop + laneHeight;
-            float laneLeft = Screen.width - settings.laneWidth - settings.rightMargin;
-            float hitLineY = laneBottom - settings.hitLineFromBottom;
-            double leadSeconds = (hitLineY - laneTop) / settings.pixelsPerSecond;
+            float width = Mathf.Min(settings.laneWidth, Mathf.Max(40f, Screen.width - 8f));
+            float laneLeft = Mathf.Clamp(Screen.width - width - settings.rightMargin, 0f, Screen.width - width);
+            float hitLineThickness = Mathf.Min(settings.hitLineThickness, laneHeight);
+            float hitLineY = HighwayGeometry.HitLineY(laneHeight, settings.hitLinePositionMode,
+                settings.hitLineFromBottom, settings.hitLinePercent, hitLineThickness);
+            double leadSeconds = hitLineY / settings.pixelsPerSecond;
 
-            DrawRect(laneLeft, laneTop, settings.laneWidth, laneHeight, new Color(0f, 0f, 0f, settings.laneOpacity));
-
-            if (settings.showBeatLines)
+            int previousDepth = GUI.depth;
+            GUI.depth = 100; // Keep the UMM settings window in front of the overlay.
+            GUI.BeginGroup(new Rect(laneLeft, laneTop, width, laneHeight));
+            try
             {
-                DrawBeatGrid(now, leadSeconds, laneLeft, hitLineY);
+                DrawRect(0, 0, width, laneHeight, new Color(0f, 0f, 0f, settings.laneOpacity));
+                float cellWidth = width / settings.laneCount;
+                if (settings.showLaneDividers && settings.laneCount > 1)
+                {
+                    for (int lane = 1; lane < settings.laneCount; lane++)
+                    {
+                        bool handBoundary = lane == settings.laneCount / 2;
+                        DrawRect(lane * cellWidth - 0.5f, 0, handBoundary ? 2 : 1, laneHeight,
+                            new Color(1, 1, 1, handBoundary ? 0.4f : 0.15f));
+                    }
+                }
+                if (settings.showBeatLines) DrawBeatGrid(now, leadSeconds, width, hitLineY);
+                DrawNotes(now, leadSeconds, width, hitLineY, laneHeight);
+                DrawRect(0, hitLineY - hitLineThickness / 2f, width,
+                    hitLineThickness, new Color(1f, 1f, 1f, 0.9f));
+                if (settings.showLaneLabels && settings.laneCount > 1)
+                {
+                    if (laneLabelStyle == null)
+                        laneLabelStyle = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Bold };
+                    laneLabelStyle.fontSize = Mathf.Clamp((int)(cellWidth * 0.3f), 11, 20);
+                    laneLabelStyle.normal.textColor = Color.white;
+                    for (int lane = 0; lane < settings.laneCount; lane++)
+                        GUI.Label(new Rect(lane * cellWidth, Mathf.Min(hitLineY + 6, laneHeight - 24), cellWidth, 22),
+                            LaneLabels[lane], laneLabelStyle);
+                }
+                // Draw warnings last so ordinary chord bars and hold bodies cannot
+                // hide them. Multiple shortages at one display time are aggregated.
+                DrawOverflowWarnings(now, leadSeconds, width, hitLineY);
             }
-
-            double secondsSinceLanding = DrawNotes(now, leadSeconds, laneLeft, hitLineY);
-            if (secondsSinceLanding < LandingFadeSeconds)
+            finally
             {
-                float glow = 1f - (float)(secondsSinceLanding / LandingFadeSeconds);
-                DrawRect(laneLeft, hitLineY - 8f, settings.laneWidth, 16f, new Color(1f, 0.95f, 0.4f, 0.55f * glow));
+                GUI.EndGroup();
+                GUI.depth = previousDepth;
             }
-
-            DrawRect(laneLeft, hitLineY - 1.5f, settings.laneWidth, 3f, new Color(1f, 1f, 1f, 0.9f));
-
-            DrawErrorReadout(laneLeft, hitLineY, settings.laneWidth);
+            DrawErrorReadout(laneLeft, laneTop + hitLineY, width);
         }
 
-        private void DrawBeatGrid(double now, double leadSeconds, float laneLeft, float hitLineY)
+        private void DrawBeatGrid(double now, double leadSeconds, float width, float hitLineY)
         {
             var settings = Startup.Settings;
             int perMeasure = Mathf.Max(1, settings.beatsPerMeasure);
 
-            for (int i = 0; i < beatMarkers.Length; i++)
+            int low = 0, high = beatMarkers.Length;
+            while (low < high)
+            {
+                int middle = low + (high - low) / 2;
+                if (beatMarkers[middle].Time < now) low = middle + 1;
+                else high = middle;
+            }
+            for (int i = low; i < beatMarkers.Length; i++)
             {
                 double secondsUntil = beatMarkers[i].Time - now;
-                if (secondsUntil < 0.0 || secondsUntil > leadSeconds)
-                {
-                    continue;
-                }
+                if (secondsUntil > leadSeconds) break;
 
                 float y = hitLineY - (float)(secondsUntil * settings.pixelsPerSecond);
                 bool measureStart = beatMarkers[i].Number % perMeasure == 0;
                 float alpha = Mathf.Clamp01(settings.beatLineOpacity * (measureStart ? 2f : 1f));
-                DrawRect(laneLeft, y, settings.laneWidth, measureStart ? 2f : 1f, new Color(1f, 1f, 1f, alpha));
+                DrawRect(0, y, width, measureStart ? 2f : 1f, new Color(1f, 1f, 1f, alpha));
             }
         }
 
-        private double DrawNotes(double now, double leadSeconds, float laneLeft, float hitLineY)
+        private void DrawNotes(double now, double leadSeconds, float width, float hitLineY, float availableHeight)
         {
             var settings = Startup.Settings;
-            double secondsSinceLanding = double.PositiveInfinity;
+            float cellWidth = width / settings.laneCount;
+            float gap = settings.laneCount > 1 ? HighwayGeometry.LaneGap(width, settings.laneCount, settings.laneGap) : 0;
+            float thickness = HighwayGeometry.Thickness(settings.noteThickness, availableHeight);
 
-            for (int i = 0; i < notes.Length; i++)
+            for (int i = FirstVisibleNote(now); i < notes.Length; i++)
             {
-                double secondsUntil = notes[i].Time - now;
-                if (secondsUntil > leadSeconds)
+                var note = notes[i];
+                double secondsUntil = note.DisplayTime - now;
+                if (secondsUntil > leadSeconds + thickness / (2f * settings.pixelsPerSecond))
                 {
-                    continue;
+                    break;
                 }
 
-                if (notes[i].IsHold)
-                {
-                    DrawHoldBody(notes[i], now, leadSeconds, laneLeft, hitLineY);
-                }
+                if (note.OverflowCount > 0) continue;
+                if (note.Lane < 0 || note.Lane >= settings.laneCount) continue;
+
+                float left = note.Lane * cellWidth + gap * 0.5f;
+                float noteWidth = cellWidth - gap;
+                if (note.IsHold) DrawHoldBody(note, now, leadSeconds, left, noteWidth, hitLineY, thickness);
 
                 float y;
                 float alpha;
@@ -416,30 +521,57 @@ namespace AdofaiHighway
                     {
                         continue;
                     }
-                    if (pastBy < secondsSinceLanding)
-                    {
-                        secondsSinceLanding = pastBy;
-                    }
                     y = hitLineY;
                     alpha = 0.95f * (1f - (float)(pastBy / LandingFadeSeconds));
+                    DrawRect(left, hitLineY - 8f, noteWidth, 16f,
+                        new Color(1f, 0.95f, 0.4f, 0.55f * (alpha / 0.95f)));
                 }
 
-                if (notes[i].Kind == NoteKind.Multitap)
+                if (note.Kind == NoteKind.Multitap)
                 {
-                    Color color = BarColor(notes[i].Kind, settings, alpha);
-                    DrawRect(laneLeft, y - 3f, settings.laneWidth, 2f, color);
-                    DrawRect(laneLeft, y + 1f, settings.laneWidth, 2f, color);
+                    Color color = BarColor(note, settings, alpha);
+                    float middleGap = Mathf.Min(3f, thickness / 3f);
+                    float band = (thickness - middleGap) / 2f;
+                    DrawRect(left, y - thickness / 2f, noteWidth, band, color);
+                    DrawRect(left, y + middleGap / 2f, noteWidth, band, color);
                 }
                 else
                 {
-                    DrawRect(laneLeft, y - 2f, settings.laneWidth, 4f, BarColor(notes[i].Kind, settings, alpha));
+                    DrawRect(left, y - thickness / 2f, noteWidth, thickness, BarColor(note, settings, alpha));
                 }
             }
-
-            return secondsSinceLanding;
         }
 
-        private void DrawHoldBody(in Note note, double now, double leadSeconds, float laneLeft, float hitLineY)
+        private int FirstVisibleNote(double now)
+        {
+            int low = 0, high = lastVisiblePrefix.Length;
+            while (low < high)
+            {
+                int mid = low + (high - low) / 2;
+                if (lastVisiblePrefix[mid] < now) low = mid + 1;
+                else high = mid;
+            }
+            return low;
+        }
+
+        private void DrawOverflowWarnings(double now, double leadSeconds, float width, float hitLineY)
+        {
+            if (overflowStyle == null)
+                overflowStyle = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, fontSize = 12, fontStyle = FontStyle.Bold };
+            overflowStyle.normal.textColor = Color.white;
+            foreach (var warning in overflowMarkers)
+            {
+                if (warning.Time - now > leadSeconds) break;
+                if (now - warning.Time > LandingFadeSeconds && warning.Release <= now) continue;
+                float y = Mathf.Min(hitLineY, hitLineY - (float)((warning.Time - now) * Startup.Settings.pixelsPerSecond));
+                DrawRect(0, y - 10, width, 20, new Color(0.65f, 0.06f, 0.04f, 0.9f));
+                string label = width < 250 ? warning.ShortLabel
+                    : Startup.Text($"轨道容量不足：还需 {warning.Count} 键", $"+{warning.Count} key(s): lane capacity exceeded");
+                GUI.Label(new Rect(0, y - 10, width, 20), label, overflowStyle);
+            }
+        }
+
+        private void DrawHoldBody(in Note note, double now, double leadSeconds, float laneLeft, float width, float hitLineY, float thickness)
         {
             var settings = Startup.Settings;
             double untilRelease = note.ReleaseTime - now;
@@ -449,7 +581,7 @@ namespace AdofaiHighway
             }
 
             float top = hitLineY - (float)(Math.Min(untilRelease, leadSeconds) * settings.pixelsPerSecond);
-            double untilPress = note.Time - now;
+            double untilPress = note.DisplayTime - now;
             float bottom = untilPress > 0.0
                 ? hitLineY - (float)(untilPress * settings.pixelsPerSecond)
                 : hitLineY;
@@ -458,15 +590,22 @@ namespace AdofaiHighway
                 return;
             }
 
-            DrawRect(laneLeft, top, settings.laneWidth, bottom - top, BarColor(note.Kind, settings, HoldBodyAlpha));
+            DrawRect(laneLeft, top, width, bottom - top, BarColor(note, settings, HoldBodyAlpha));
+            float tailThickness = Mathf.Max(1f, thickness / 2f);
+            if (untilRelease <= leadSeconds)
+                DrawRect(laneLeft, top - tailThickness / 2f, width, tailThickness, BarColor(note, settings, 0.95f));
+            if (untilPress <= 0)
+                DrawRect(laneLeft, hitLineY - thickness / 2f, width, thickness, BarColor(note, settings, 0.95f));
         }
 
-        private static Color BarColor(NoteKind kind, Settings settings, float alpha) => kind switch
+        private static Color BarColor(in Note note, Settings settings, float alpha)
         {
-            NoteKind.Multitap => new Color(settings.multitapColorR, settings.multitapColorG, settings.multitapColorB, alpha),
-            NoteKind.Midspin => new Color(1f, 0.55f, 0.1f, alpha),
-            _ => new Color(settings.noteColorR, settings.noteColorG, settings.noteColorB, alpha),
-        };
+            if (note.Kind == NoteKind.Multitap)
+                return new Color(settings.multitapColorR, settings.multitapColorG, settings.multitapColorB, alpha);
+            if (settings.colorByHand && settings.laneCount > 1 && note.Lane < settings.laneCount / 2)
+                return new Color(settings.leftNoteColorR, settings.leftNoteColorG, settings.leftNoteColorB, alpha);
+            return new Color(settings.noteColorR, settings.noteColorG, settings.noteColorB, alpha);
+        }
 
         private void DrawErrorReadout(float laneLeft, float hitLineY, float laneWidth)
         {

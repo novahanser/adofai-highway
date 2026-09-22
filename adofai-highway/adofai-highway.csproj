@@ -14,11 +14,18 @@
     <Deterministic>true</Deterministic>
   </PropertyGroup>
 
-  <!-- This machine's game install (absolute local paths). -->
+  <!-- Override with -p:GameDir=... for another Steam library. No game DLLs are shipped. -->
   <PropertyGroup>
-    <GameDir>D:\SteamLibrary\steamapps\common\A Dance of Fire and Ice</GameDir>
+    <GameDir Condition="'$(GameDir)' == ''">$(MSBuildProgramFiles32)\Steam\steamapps\common\A Dance of Fire and Ice</GameDir>
     <ManagedDir>$(GameDir)\A Dance of Fire and Ice_Data\Managed</ManagedDir>
   </PropertyGroup>
+
+  <Target Name="CheckGameReferences" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(ManagedDir)\Assembly-CSharp.dll')"
+           Text="Game assemblies not found. Build with -p:GameDir=&quot;your A Dance of Fire and Ice installation&quot;." />
+    <Error Condition="!Exists('$(ManagedDir)\UnityModManager\UnityModManager.dll')"
+           Text="UnityModManager is not installed in the selected GameDir." />
+  </Target>
 
   <ItemGroup>
     <Reference Include="Assembly-CSharp">

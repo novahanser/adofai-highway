@@ -2,6 +2,14 @@ using HarmonyLib;
 
 namespace AdofaiHighway
 {
+    // Editor changes may reuse both the list and every floor object. Invalidate
+    // after game timing is finalized, rather than only watching list/count changes.
+    [HarmonyPatch(typeof(scrLevelMaker), nameof(scrLevelMaker.CalculateFloorEntryTimes))]
+    internal static class ChartTimingPatch
+    {
+        private static void Postfix() => HighwayBehaviour.Instance?.InvalidateChart();
+    }
+
     // The game computes a precise, sub-frame angular error for each hit and passes it
     // to its own error meter. We read it from there instead of timing inputs against
     // our frame-quantized clock.

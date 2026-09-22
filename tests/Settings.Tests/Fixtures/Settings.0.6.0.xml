@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Settings xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <pixelsPerSecond>456</pixelsPerSecond>
+  <laneWidth>375</laneWidth>
+  <laneHeightFraction>0.75</laneHeightFraction>
+  <rightMargin>36</rightMargin>
+  <hitLineFromBottom>128</hitLineFromBottom>
+  <laneOpacity>0.625</laneOpacity>
+  <noteColorR>0.125</noteColorR>
+  <noteColorG>0.5</noteColorG>
+  <noteColorB>0.875</noteColorB>
+  <multitapColorR>0.25</multitapColorR>
+  <multitapColorG>0.375</multitapColorG>
+  <multitapColorB>0.75</multitapColorB>
+  <showBeatLines>false</showBeatLines>
+  <beatsPerMeasure>7</beatsPerMeasure>
+  <beatLineOpacity>0.3125</beatLineOpacity>
+  <offsetMs>-123.5</offsetMs>
+  <autoOffsetMs>234.5</autoOffsetMs>
+</Settings>
